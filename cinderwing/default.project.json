@@ -1,0 +1,23 @@
+{
+  "name": "cinderwing",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "Cinderwing": {
+        "$path": "src/ReplicatedStorage/Cinderwing"
+      }
+    },
+    "ServerScriptService": {
+      "CinderwingSpawner": {
+        "$path": "src/ServerScriptService/CinderwingSpawner.server.lua"
+      }
+    },
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "CinderwingClient": {
+          "$path": "src/StarterPlayer/StarterPlayerScripts/CinderwingClient.client.lua"
+        }
+      }
+    }
+  }
+}
