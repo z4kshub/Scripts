@@ -1,4 +1,5 @@
--- Builds the Cinderwing model from parts. Every joint is an invisible bone part
+-- Builds the Cinderwing model from parts in a low-poly style: flat-shaded
+-- blocks and wedges, no curved meshes. Every joint is an invisible bone part
 -- driven by a Motor6D; all visible geometry is welded to its bone.
 local Rig = require(script.Parent.Rig)
 local Config = require(script.Parent.Config)
@@ -7,18 +8,18 @@ local V3 = Vector3.new
 local RGB = Color3.fromRGB
 
 local Colors = {
-	Scale = RGB(40, 36, 38),
-	ScaleDark = RGB(27, 24, 26),
-	Belly = RGB(64, 50, 46),
-	Spine = RGB(92, 26, 22),
-	SpineDark = RGB(54, 20, 20),
-	Membrane = RGB(142, 40, 22),
-	MembraneDark = RGB(90, 28, 20),
-	Horn = RGB(66, 58, 54),
-	Claw = RGB(22, 20, 20),
-	Tooth = RGB(222, 212, 188),
-	Mouth = RGB(128, 28, 34),
-	Eye = RGB(255, 128, 24),
+	Scale = RGB(58, 52, 60),
+	ScaleDark = RGB(38, 34, 40),
+	Belly = RGB(118, 74, 56),
+	Spine = RGB(176, 52, 32),
+	SpineDark = RGB(122, 36, 28),
+	Membrane = RGB(206, 74, 36),
+	MembraneDark = RGB(150, 46, 30),
+	Horn = RGB(128, 112, 98),
+	Claw = RGB(30, 26, 28),
+	Tooth = RGB(238, 230, 208),
+	Mouth = RGB(156, 42, 46),
+	Eye = RGB(255, 150, 30),
 }
 
 local MEMBRANE_THICKNESS = 0.12
@@ -85,44 +86,72 @@ function Builder.build()
 	end
 
 	-- Shape helpers ----------------------------------------------------------
-	local function ell(bone, pos, size, color, cf, material)
-		local p = newPart("Part", "Scale")
-		p.Size = size
-		p.Color = color
-		p.Material = material or Enum.Material.Slate
-		p.CFrame = cf and (cf.Rotation + pos) or CFrame.new(pos)
-		local mesh = Instance.new("SpecialMesh")
-		mesh.MeshType = Enum.MeshType.Sphere
-		mesh.Parent = p
-		attach(bone, p)
-		return p
-	end
+	-- Everything is flat-faced blocks and wedges in SmoothPlastic for a low-poly look.
+	local FLAT = Enum.Material.SmoothPlastic
 
-	local function box(bone, pos, size, color, material)
+	local function block(bone, cf, size, color, material)
 		local p = newPart("Part", "Plate")
 		p.Size = size
 		p.Color = color
-		p.Material = material or Enum.Material.Slate
-		p.CFrame = CFrame.new(pos)
+		p.Material = material or FLAT
+		p.CFrame = cf
 		attach(bone, p)
 		return p
-	end
-
-	-- Ellipsoid stretched from a to b. w is the width across `up`, h along it.
-	local function limb(bone, a, b, w, h, lengthScale, color, up, material)
-		local mid = (a + b) / 2
-		local cf = CFrame.lookAt(mid, b, up or V3(0, 1, 0))
-		return ell(bone, mid, V3(w, h, (b - a).Magnitude * lengthScale), color, cf, material)
 	end
 
 	local function wedge(bone, cf, size, color, material)
 		local p = newPart("WedgePart", "Spine")
 		p.Size = size
 		p.Color = color
-		p.Material = material or Enum.Material.Slate
+		p.Material = material or FLAT
 		p.CFrame = cf
 		attach(bone, p)
 		return p
+	end
+
+	-- Right-triangle prism: right angle at P, legs u and v, extruded `len` along u x v.
+	local function rtri(bone, P, u, v, len, color)
+		local y, z = v.Unit, -u.Unit
+		return wedge(bone, CFrame.fromMatrix(P + u / 2 + v / 2, y:Cross(z), y, z), V3(len, v.Magnitude, u.Magnitude), color)
+	end
+
+	-- Orthonormal frame running from a to b with `up` as close to upHint as possible.
+	local function axes(a, b, upHint)
+		local d = (b - a).Unit
+		local hint = upHint or V3(0, 1, 0)
+		local up = hint - d * hint:Dot(d)
+		if up.Magnitude < 1e-3 then
+			up = V3(0, 0, 1) - d * d.Z
+		end
+		up = up.Unit
+		return d, up, d:Cross(up)
+	end
+
+	-- Box from a to b.
+	local function bar(bone, a, b, w, h, color, upHint, lengthScale)
+		local d, up, right = axes(a, b, upHint)
+		local len = (b - a).Magnitude * (lengthScale or 1)
+		return block(bone, CFrame.fromMatrix((a + b) / 2, right, up, -d), V3(w, h, len), color)
+	end
+
+	-- Hexagonal body segment from a to b: a box with a ridged roof and a keel.
+	-- opt: up, scale (length), roof / keel (fractions of h), belly (keel colour).
+	local function seg(bone, a, b, w, h, color, opt)
+		opt = opt or {}
+		local d, up, right = axes(a, b, opt.up)
+		local len = (b - a).Magnitude * (opt.scale or 1.12)
+		local roof, keel = h * (opt.roof or 0.26), h * (opt.keel or 0.26)
+		local core = h - roof - keel
+		local mid = (a + b) / 2
+		block(bone, CFrame.fromMatrix(mid, right, up, -d), V3(w, core, len), color)
+		for _, sx in { 1, -1 } do
+			if roof > 0.01 then
+				rtri(bone, mid + up * (core / 2), right * (w / 2 * sx), up * roof, len, color)
+			end
+			if keel > 0.01 then
+				rtri(bone, mid - up * (core / 2), right * (w / 2 * sx), -up * keel, len, opt.belly or color)
+			end
+		end
 	end
 
 	-- Swept dorsal fin: `base` is the middle of its foot, the tall edge is at the rear.
@@ -166,37 +195,37 @@ function Builder.build()
 		if height < 0.05 then
 			return
 		end
-		local material = Enum.Material.SmoothPlastic
 		if len1 > 0.05 then
-			local w1 = wedge(bone, CFrame.fromMatrix((a + b) / 2, right, up, back), V3(MEMBRANE_THICKNESS, height, len1), color, material)
+			local w1 = wedge(bone, CFrame.fromMatrix((a + b) / 2, right, up, back), V3(MEMBRANE_THICKNESS, height, len1), color)
 			w1.Name = name or "Membrane"
 		end
 		if len2 > 0.05 then
-			local w2 = wedge(bone, CFrame.fromMatrix((a + c) / 2, -right, up, -back), V3(MEMBRANE_THICKNESS, height, len2), color, material)
+			local w2 = wedge(bone, CFrame.fromMatrix((a + c) / 2, -right, up, -back), V3(MEMBRANE_THICKNESS, height, len2), color)
 			w2.Name = name or "Membrane"
 		end
 	end
 
+	local rest = Rig.Rest
+	local FWD, BACK = V3(0, 0, -1), V3(0, 0, 1)
+
 	-- Torso ------------------------------------------------------------------
+	-- { bone, centre, width, height, length }
 	local torso = {
-		{ "Chest", V3(0, 0.2, -4.2), V3(8.0, 7.4, 11.0) },
-		{ "Body", V3(0, -0.2, 1.4), V3(7.2, 6.5, 10.4) },
-		{ "Hips", V3(0, 0, 6.3), V3(6.4, 5.8, 7.6) },
+		{ "Chest", V3(0, 0.3, -4.0), 8.2, 7.8, 11.0 },
+		{ "Body", V3(0, -0.1, 1.6), 7.2, 6.6, 9.6 },
+		{ "Hips", V3(0, 0.1, 6.4), 6.2, 5.8, 7.0 },
 	}
 	for _, t in torso do
-		ell(t[1], t[2], t[3], Colors.Scale)
+		local c, half = t[2], V3(0, 0, t[5] / 2)
+		seg(t[1], c + half, c - half, t[3], t[4], Colors.Scale, { scale = 1, belly = Colors.Belly })
 	end
-	ell("Chest", V3(0, -2.0, -4.8), V3(5.2, 4.2, 8.0), Colors.Belly) -- keel
-	ell("Body", V3(0, -1.6, 1.2), V3(5.0, 4.2, 9.6), Colors.Belly)
-	ell("Hips", V3(0, -1.1, 6.6), V3(4.0, 3.8, 6.4), Colors.Belly)
-	ell("Chest", V3(0, 1.5, -7.8), V3(5.6, 5.8, 5.2), Colors.Scale) -- neck root
+	seg("Chest", V3(0, 1.6, -6.0), V3(0, 2.0, -10.6), 5.8, 6.0, Colors.Scale, { scale = 1, belly = Colors.Belly }) -- neck root
 
-	local function topY(z)
+	local function ridgeY(z)
 		local best = -math.huge
 		for _, t in torso do
-			local u = (z - t[2].Z) / (t[3].Z / 2)
-			if math.abs(u) < 1 then
-				best = math.max(best, t[2].Y + t[3].Y / 2 * math.sqrt(1 - u * u))
+			if math.abs(z - t[2].Z) < t[5] / 2 then
+				best = math.max(best, t[2].Y + t[4] / 2)
 			end
 		end
 		return best
@@ -204,22 +233,24 @@ function Builder.build()
 
 	-- Dorsal sail along the back, tallest over the shoulders.
 	do
-		local z = -8.2
-		while z <= 9.6 do
-			local t = (z + 8.2) / 17.8
-			local height = 2.8 - 1.3 * t
+		local z, k = -8.0, 0
+		while z <= 9.4 do
+			local t = (z + 8.0) / 17.4
+			local height = 3.0 - 1.4 * t
 			local bone = z < -1 and "Chest" or (z < 4 and "Body" or "Hips")
-			local base = V3(0, topY(z) - 0.35, z)
-			fin(bone, base, V3(0, 1, 0.5), V3(0, 0, 1), 1.5, height, 0.24, Colors.Spine)
-			for _, sx in { 1, -1 } do
-				spike(bone, base + V3(0.75 * sx, -0.3, 0.2), V3(0.45 * sx, 0.8, 0.6), height * 0.5, 0.5, 0.2, Colors.SpineDark)
+			local base = V3(0, ridgeY(z) - 0.3, z)
+			fin(bone, base, V3(0, 1, 0.5), BACK, 1.9, height, 0.35, Colors.Spine)
+			if k % 2 == 0 then
+				for _, sx in { 1, -1 } do
+					spike(bone, base + V3(1.3 * sx, -0.7, 0.2), V3(0.6 * sx, 0.7, 0.6), height * 0.5, 0.7, 0.3, Colors.SpineDark)
+				end
 			end
-			z += 1.2
+			z += 1.75
+			k += 1
 		end
 	end
 
 	-- Neck -------------------------------------------------------------------
-	local rest = Rig.Rest
 	do
 		local widths = { 4.9, 4.4, 3.9, 3.5, 3.2 }
 		for i = 1, Rig.NeckCount do
@@ -227,17 +258,12 @@ function Builder.build()
 			local a = rest[name]
 			local b = i < Rig.NeckCount and rest["Neck" .. (i + 1)] or rest.Head
 			local w = widths[i]
-			local h = w * 1.04
-			limb(name, a, b, w, h, 1.6, Colors.Scale)
-			limb(name, a + V3(0, -h * 0.2, 0), b + V3(0, -h * 0.2, 0), w * 0.62, h * 0.66, 1.5, Colors.Belly)
-			for k = 0, 1 do
-				local p = a:Lerp(b, 0.15 + 0.5 * k)
-				local height = 2.25 - 0.13 * (i - 1) - 0.06 * k
-				fin(name, p + V3(0, h * 0.42, 0), V3(0, 1, 0.55), V3(0, 0, 1), 1.35, height, 0.22, Colors.Spine)
-				for _, sx in { 1, -1 } do
-					spike(name, p + V3(w * 0.36 * sx, h * 0.28, 0), V3(0.6 * sx, 0.5, 0.75), 1.5 - 0.1 * i, 0.5, 0.2, Colors.SpineDark)
-					spike(name, p + V3(w * 0.45 * sx, -h * 0.05, 0.4), V3(0.85 * sx, 0.05, 0.7), 1.0 - 0.06 * i, 0.42, 0.18, Colors.ScaleDark)
-				end
+			local h = w * 1.05
+			seg(name, a, b, w, h, Colors.Scale, { scale = 1.3, belly = Colors.Belly })
+			local p = a:Lerp(b, 0.4)
+			fin(name, p + V3(0, h * 0.42, 0), V3(0, 1, 0.55), BACK, 1.7, 2.4 - 0.15 * (i - 1), 0.32, Colors.Spine)
+			for _, sx in { 1, -1 } do
+				spike(name, p + V3(w * 0.42 * sx, h * 0.12, 0.3), V3(0.7 * sx, 0.35, 0.75), 1.6 - 0.12 * i, 0.7, 0.28, Colors.SpineDark)
 			end
 		end
 	end
@@ -246,61 +272,62 @@ function Builder.build()
 	do
 		local H = rest.Head
 		local HS = 1.25 -- head scale
-		local function sz(x, y, z)
-			return V3(x, y, z) * HS
-		end
 		local function h(x, y, z)
 			return H + V3(x, y, z) * HS
 		end
-		ell("Head", h(0, 0.25, -1.5), sz(3.1, 2.5, 4.4), Colors.Scale) -- cranium
-		ell("Head", h(0, 0.0, -4.2), sz(2.3, 1.75, 5.0), Colors.Scale) -- snout
-		ell("Head", h(0, 0.42, -5.9), sz(1.55, 0.95, 1.6), Colors.ScaleDark) -- nose
-		box("Head", h(0, -0.6, -3.4), sz(1.3, 0.3, 4.2), Colors.Mouth, Enum.Material.SmoothPlastic) -- palate
+		local function sz(x, y, z)
+			return V3(x, y, z) * HS
+		end
+		local function hblock(bone, x, y, z, size, color, material)
+			return block(bone, CFrame.new(h(x, y, z)), size, color, material)
+		end
+
+		seg("Head", h(0, 0.3, 0.5), h(0, 0.3, -3.1), 3.0 * HS, 2.6 * HS, Colors.Scale, { scale = 1, belly = Colors.Scale }) -- cranium
+		hblock("Head", 0, -0.15, -4.6, sz(2.1, 1.1, 3.6), Colors.Scale) -- snout
+		rtri("Head", h(0, 0.4, -2.8), sz(0, 0, -3.6), sz(0, 0.75, 0), 2.1 * HS, Colors.Scale) -- sloped bridge
+		hblock("Head", 0, 0.15, -6.55, sz(1.7, 0.8, 0.5), Colors.ScaleDark) -- nose
+		hblock("Head", 0, -0.75, -4.0, sz(1.5, 0.08, 4.4), Colors.Mouth) -- palate
 
 		for _, sx in { 1, -1 } do
-			ell("Head", h(1.02 * sx, 0.95, -2.5), sz(0.95, 0.75, 2.5), Colors.ScaleDark) -- brow ridge
-			local eye = ell("Head", h(1.26 * sx, 0.52, -2.75), sz(0.4, 0.42, 0.66), Colors.Eye, nil, Enum.Material.Neon)
+			bar("Head", h(0.85 * sx, 1.45, -0.9), h(1.25 * sx, 0.95, -3.7), 0.8 * HS, 0.55 * HS, Colors.ScaleDark) -- brow
+			local eye = hblock("Head", 1.47 * sx, 0.5, -2.75, sz(0.16, 0.38, 0.75), Colors.Eye, Enum.Material.Neon)
 			eye.Name = "Eye"
-			ell("Head", h(1.42 * sx, 0.52, -2.8), sz(0.14, 0.34, 0.2), Colors.Claw, nil, Enum.Material.SmoothPlastic) -- pupil
-			ell("Head", h(1.05 * sx, -0.55, -1.0), sz(1.0, 1.7, 2.0), Colors.Scale) -- jaw muscle
-			ell("Head", h(0.55 * sx, 0.5, -6.15), sz(0.3, 0.22, 0.45), Colors.Claw) -- nostril
+			hblock("Head", 1.53 * sx, 0.5, -2.8, sz(0.06, 0.34, 0.14), Colors.Claw) -- pupil
+			hblock("Head", 1.15 * sx, -0.55, -1.0, sz(0.8, 1.5, 1.9), Colors.Scale) -- jaw muscle
+			hblock("Head", 0.52 * sx, 0.47, -6.6, sz(0.3, 0.16, 0.3), Colors.Claw) -- nostril
 
 			-- Horn crown, three tiers sweeping back.
-			limb("Head", h(0.85 * sx, 1.0, -0.6), h(1.9 * sx, 2.5, 4.4), 0.85, 0.85, 1.05, Colors.Horn)
-			limb("Head", h(1.35 * sx, 0.45, -0.3), h(3.0 * sx, 0.95, 3.6), 0.7, 0.7, 1.05, Colors.Horn)
-			limb("Head", h(1.4 * sx, -0.3, -0.7), h(2.9 * sx, -0.75, 2.2), 0.55, 0.55, 1.05, Colors.Horn)
-			limb("Head", h(0.45 * sx, 1.25, -0.5), h(0.8 * sx, 2.3, 2.9), 0.55, 0.55, 1.05, Colors.Horn)
+			spike("Head", h(0.9 * sx, 1.1, -0.6), V3(1.05 * sx, 1.5, 5.0), 5.4 * HS, 0.95, 0.5, Colors.Horn)
+			spike("Head", h(1.4 * sx, 0.45, -0.4), V3(1.65 * sx, 0.5, 3.9), 4.3 * HS, 0.8, 0.45, Colors.Horn)
+			spike("Head", h(1.45 * sx, -0.3, -0.7), V3(1.5 * sx, -0.45, 2.9), 3.3 * HS, 0.65, 0.4, Colors.Horn)
+			spike("Head", h(0.45 * sx, 1.35, -0.5), V3(0.35 * sx, 1.0, 3.4), 3.2 * HS, 0.6, 0.35, Colors.Horn)
 
-			for k = 0, 3 do -- brow spikes
-				spike("Head", h(1.1 * sx, 1.2, -3.3 + 0.75 * k), V3(0.45 * sx, 0.7, 0.75), 0.75 + 0.14 * k, 0.4, 0.16, Colors.SpineDark)
+			for k = 0, 2 do -- brow spikes
+				spike("Head", h(1.1 * sx, 1.3, -3.0 + 1.0 * k), V3(0.45 * sx, 0.7, 0.75), (0.8 + 0.2 * k) * HS, 0.55, 0.22, Colors.SpineDark)
 			end
-			for k = 0, 3 do -- cheek frill
-				spike("Head", h(1.35 * sx, -0.1 - 0.22 * k, -1.9 + 0.5 * k), V3(0.8 * sx, -0.15, 0.7), 1.5 - 0.12 * k, 0.45, 0.16, Colors.ScaleDark)
+			for k = 0, 2 do -- cheek frill
+				spike("Head", h(1.4 * sx, -0.15 - 0.3 * k, -1.8 + 0.7 * k), V3(0.8 * sx, -0.15, 0.7), (1.5 - 0.15 * k) * HS, 0.6, 0.22, Colors.ScaleDark)
 			end
-
-			-- Upper teeth
-			for k = 0, 8 do
-				local z = -1.7 - 0.52 * k
-				local big = (k == 7 or k == 5) and 0.3 or 0
-				spike("Head", h((0.86 - 0.03 * k) * sx, -0.72, z), V3(0, -1, -0.12), 0.55 + big, 0.3, 0.16, Colors.Tooth, V3(0, 0, 1), Enum.Material.SmoothPlastic)
+			for k = 0, 4 do -- upper teeth
+				local big = k == 3 and 0.3 or 0
+				spike("Head", h((0.85 - 0.05 * k) * sx, -0.7, -2.2 - 0.85 * k), V3(0, -1, -0.12), (0.6 + big) * HS, 0.4, 0.22, Colors.Tooth, BACK)
 			end
 		end
-		for k = 0, 4 do -- snout ridge
-			spike("Head", h(0, 0.85, -5.0 + 0.7 * k), V3(0, 0.75, 0.65), 0.55 + 0.1 * k, 0.4, 0.16, Colors.SpineDark, V3(0, 0, 1))
+		for k = 0, 2 do -- snout ridge
+			spike("Head", h(0, 0.95, -5.0 + 1.0 * k), V3(0, 0.75, 0.65), (0.6 + 0.12 * k) * HS, 0.55, 0.22, Colors.SpineDark, BACK)
 		end
-		fin("Head", h(0, 1.35, -0.6), V3(0, 1, 0.6), V3(0, 0, 1), 1.4, 1.9, 0.22, Colors.Spine)
+		fin("Head", h(0, 1.55, -0.4), V3(0, 1, 0.6), BACK, 1.8, 2.2, 0.3, Colors.Spine)
 
-		-- Lower jaw
-		ell("Jaw", h(0, -1.2, -3.4), sz(1.95, 0.95, 5.6), Colors.Scale)
-		ell("Jaw", h(0, -0.92, -3.3), sz(1.0, 0.3, 3.8), Colors.Mouth, nil, Enum.Material.SmoothPlastic) -- tongue
+		-- Lower jaw: flat top, keel underneath.
+		seg("Jaw", h(0, -1.1, -0.8), h(0, -1.1, -6.3), 1.85 * HS, 0.95 * HS, Colors.Scale, { scale = 1, roof = 0, keel = 0.35, belly = Colors.Belly })
+		hblock("Jaw", 0, -0.86, -3.3, sz(0.9, 0.1, 3.6), Colors.Mouth) -- tongue
 		for _, sx in { 1, -1 } do
-			for k = 0, 7 do
-				local z = -1.95 - 0.52 * k
-				local big = k == 6 and 0.3 or 0
-				spike("Jaw", h((0.74 - 0.03 * k) * sx, -0.98, z), V3(0, 1, -0.1), 0.5 + big, 0.28, 0.15, Colors.Tooth, V3(0, 0, 1), Enum.Material.SmoothPlastic)
+			for k = 0, 3 do
+				local big = k == 3 and 0.3 or 0
+				spike("Jaw", h((0.72 - 0.05 * k) * sx, -0.95, -2.6 - 0.9 * k), V3(0, 1, -0.1), (0.55 + big) * HS, 0.38, 0.2, Colors.Tooth, BACK)
 			end
-			for k = 0, 5 do -- chin spikes
-				spike("Jaw", h(0.55 * sx, -1.5, -1.3 - 0.72 * k), V3(0.3 * sx, -1, 0.6), 1.0 - 0.07 * k, 0.4, 0.16, Colors.ScaleDark, V3(0, 0, 1))
+			for k = 0, 2 do -- chin spikes
+				spike("Jaw", h(0.55 * sx, -1.45, -1.4 - 1.1 * k), V3(0.3 * sx, -1, 0.6), (1.0 - 0.1 * k) * HS, 0.5, 0.22, Colors.ScaleDark, BACK)
 			end
 		end
 	end
@@ -313,26 +340,20 @@ function Builder.build()
 			local a = rest[name]
 			local b = i < Rig.TailCount and rest["Tail" .. (i + 1)] or Rig.TailTip
 			local w = widths[i]
-			limb(name, a, b, w, w * 0.96, 1.55, Colors.Scale)
-			local count = i <= 6 and 2 or 1
-			for k = 0, count - 1 do
-				local p = a:Lerp(b, 0.2 + 0.5 * k)
-				local height = math.max(0.5, 1.5 - 0.1 * i)
-				fin(name, p + V3(0, w * 0.4, 0), V3(0, 1, 0.55), V3(0, 0, 1), 1.2, height, 0.2, Colors.Spine)
-			end
-			if i >= 4 then
-				local p = a:Lerp(b, 0.5)
+			seg(name, a, b, w, w, Colors.Scale, { scale = 1.25, belly = Colors.Belly })
+			local p = a:Lerp(b, 0.4)
+			fin(name, p + V3(0, w * 0.42, 0), V3(0, 1, 0.55), BACK, 1.6, math.max(0.6, 1.9 - 0.13 * i), 0.3, Colors.Spine)
+			if i >= 3 and i % 2 == 1 then
 				for _, sx in { 1, -1 } do
-					spike(name, p + V3(w * 0.38 * sx, 0, 0), V3(0.8 * sx, 0.1, 0.8), 0.95, 0.4, 0.16, Colors.SpineDark)
+					spike(name, p + V3(w * 0.42 * sx, 0, 0), V3(0.8 * sx, 0.1, 0.8), 1.1, 0.55, 0.22, Colors.SpineDark)
 				end
 			end
 		end
 		local tip = Rig.TailTip
 		local last = "Tail" .. Rig.TailCount
-		spike(last, tip + V3(0, 0, -0.6), V3(0, 0, 1), 2.6, 0.9, 0.24, Colors.Spine)
+		spike(last, tip + V3(0, 0, -0.6), BACK, 3.0, 1.2, 0.3, Colors.Spine)
 		for _, sx in { 1, -1 } do
-			spike(last, tip + V3(0.1 * sx, 0, -1.2), V3(0.75 * sx, 0, 1), 1.9, 0.7, 0.2, Colors.Spine)
-			spike(last, tip + V3(0, 0.1 * sx, -1.0), V3(0, 0.7 * sx, 1), 1.5, 0.6, 0.2, Colors.SpineDark, V3(1, 0, 0))
+			spike(last, tip + V3(0.1 * sx, 0, -1.2), V3(0.75 * sx, 0, 1), 2.2, 0.9, 0.26, Colors.Spine)
 		end
 	end
 
@@ -347,19 +368,19 @@ function Builder.build()
 		local S, E, W, B = m(wing.Shoulder), m(wing.Elbow), m(wing.Wrist), m(wing.BodyAttach)
 		local arm, fore, hand = "WingArm" .. s, "WingFore" .. s, "WingHand" .. s
 
-		ell("Chest", S + V3(-0.5 * sx, -0.6, 0.4), V3(4.2, 4.4, 5.8), Colors.Scale) -- shoulder mass
-		limb(arm, S, E, 3.1, 2.5, 1.2, Colors.Scale)
-		limb(fore, E, W, 2.2, 1.8, 1.12, Colors.Scale)
-		ell(fore, E, V3(2.5, 2.3, 2.5), Colors.ScaleDark)
-		spike(fore, E, V3(-0.3 * sx, 0.15, 1), 2.0, 0.8, 0.3, Colors.Claw)
-		ell(hand, W, V3(2.4, 2.1, 2.4), Colors.ScaleDark)
+		seg("Chest", S + V3(-0.6 * sx, -0.4, 2.6), S + V3(-0.6 * sx, -0.4, -2.4), 4.0, 4.6, Colors.Scale, { scale = 1 }) -- shoulder mass
+		seg(arm, S, E, 2.9, 2.5, Colors.Scale, { scale = 1.15, up = BACK })
+		seg(fore, E, W, 2.0, 1.8, Colors.Scale, { scale = 1.08, up = BACK })
+		block(fore, CFrame.new(E), V3(2.4, 2.3, 2.4), Colors.ScaleDark) -- elbow
+		spike(fore, E, V3(-0.3 * sx, 0.15, 1), 2.2, 0.9, 0.4, Colors.Claw)
+		block(hand, CFrame.new(W), V3(2.2, 2.0, 2.2), Colors.ScaleDark) -- wrist
 
 		-- Thumb claws: these carry the weight when the dragon walks on its wings.
 		for _, dx in { 0.4, -0.35 } do
 			local a = W + V3(dx * sx, -0.2, -0.4)
 			local b = a + V3(dx * 1.6 * sx, -0.5, -2.2)
-			limb(hand, a, b, 0.7, 0.7, 1.15, Colors.ScaleDark)
-			spike(hand, b + V3(0, 0, 0.2), V3(dx * 0.4 * sx, -0.55, -1), 1.3, 0.5, 0.3, Colors.Claw)
+			bar(hand, a, b, 0.75, 0.75, Colors.ScaleDark, nil, 1.1)
+			spike(hand, b + V3(0, 0, 0.2), V3(dx * 0.4 * sx, -0.55, -1), 1.4, 0.6, 0.35, Colors.Claw)
 		end
 
 		for i = 1, Rig.FingerCount do
@@ -368,10 +389,10 @@ function Builder.build()
 			local M = m(wing.Mids[i] + V3(0, 1, 0):Cross(Tr - Wr).Unit * 0.7)
 			local T = m(Tr)
 			local f = "F" .. i .. s
-			limb(f, W, M, 0.8, 0.62, 1.04, Colors.ScaleDark)
-			limb(f, M, T, 0.58, 0.46, 1.04, Colors.ScaleDark)
-			ell(f, M, V3(0.85, 0.7, 0.85), Colors.ScaleDark)
-			spike(f, T - (T - M).Unit * 0.3, T - M, 1.3, 0.4, 0.22, Colors.Claw, V3(0, 0, 1))
+			bar(f, W, M, 0.8, 0.6, Colors.ScaleDark, nil, 1.04)
+			bar(f, M, T, 0.6, 0.45, Colors.ScaleDark, nil, 1.02)
+			block(f, CFrame.new(M), V3(0.95, 0.75, 0.95), Colors.ScaleDark) -- knuckle
+			spike(f, T - (T - M).Unit * 0.3, T - M, 1.5, 0.5, 0.28, Colors.Claw, BACK)
 		end
 
 		-- Membrane between the fingers: slices on hidden ribs, scalloped along
@@ -414,21 +435,20 @@ function Builder.build()
 		-- Hind leg
 		local leg = Rig.Leg
 		local hip, knee, ankle, toeBase = m(leg.Hip), m(leg.Knee), m(leg.Ankle), m(leg.ToeBase)
-		local fwd = V3(0, 0, -1)
-		ell("Hips", hip + V3(-0.4 * sx, 0.4, 0.2), V3(3.6, 4.8, 5.4), Colors.Scale)
-		limb("Thigh" .. s, hip, knee, 3.4, 4.6, 1.3, Colors.Scale, fwd)
-		limb("Shin" .. s, knee, ankle, 2.2, 2.7, 1.2, Colors.Scale, fwd)
-		ell("Shin" .. s, knee, V3(2.4, 2.4, 2.4), Colors.ScaleDark)
-		spike("Shin" .. s, ankle, V3(0, 0.45, 1), 1.5, 0.7, 0.26, Colors.Claw)
-		limb("Foot" .. s, ankle, toeBase, 1.9, 2.0, 1.5, Colors.Scale, fwd)
-		ell("Toes" .. s, toeBase + V3(0, 0.05, 0.1), V3(2.7, 1.1, 2.2), Colors.ScaleDark)
+		seg("Hips", hip + V3(-0.5 * sx, 0.6, 2.8), hip + V3(-0.5 * sx, 0.6, -2.4), 3.8, 5.0, Colors.Scale, { scale = 1 }) -- haunch
+		seg("Thigh" .. s, hip, knee, 3.4, 4.4, Colors.Scale, { up = FWD, scale = 1.25 })
+		block("Shin" .. s, CFrame.new(knee), V3(2.4, 2.4, 2.4), Colors.ScaleDark)
+		seg("Shin" .. s, knee, ankle, 2.2, 2.6, Colors.Scale, { up = BACK, scale = 1.12 })
+		spike("Shin" .. s, ankle, V3(0, 0.45, 1), 1.7, 0.9, 0.35, Colors.Claw)
+		seg("Foot" .. s, ankle, toeBase, 1.9, 2.0, Colors.Scale, { up = FWD, scale = 1.3 })
+		block("Toes" .. s, CFrame.new(toeBase + V3(0, 0.05, 0.1)), V3(2.7, 1.1, 2.2), Colors.ScaleDark)
 		for _, dx in { -0.42, 0, 0.42 } do
 			local a = toeBase + V3(dx * 1.5, 0, -0.3)
 			local b = a + V3(dx * 2.4, -0.05, -2.7)
-			limb("Toes" .. s, a, b, 0.9, 0.85, 1.15, Colors.ScaleDark)
-			spike("Toes" .. s, b + V3(0, 0.1, 0.25), V3(dx * 0.5, -0.38, -1), 1.15, 0.5, 0.28, Colors.Claw)
+			bar("Toes" .. s, a, b, 0.9, 0.85, Colors.ScaleDark, nil, 1.1)
+			spike("Toes" .. s, b + V3(0, 0.1, 0.25), V3(dx * 0.5, -0.38, -1), 1.3, 0.6, 0.36, Colors.Claw)
 		end
-		spike("Foot" .. s, ankle + V3(0, -0.6, 0.3), V3(0, -0.5, 1), 1.3, 0.5, 0.26, Colors.Claw) -- dewclaw
+		spike("Foot" .. s, ankle + V3(0, -0.6, 0.3), V3(0, -0.5, 1), 1.4, 0.6, 0.3, Colors.Claw) -- dewclaw
 	end
 
 	-- Humanoid and flight constraints ---------------------------------------

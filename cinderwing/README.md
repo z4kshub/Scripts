@@ -1,6 +1,7 @@
 # Cinderwing
 
-A second, separate dragon: a dark wyvern with red-orange wing membranes that
+A second, separate dragon in a low-poly style (flat-shaded blocks and wedges,
+flat colours): a dark wyvern with red-orange wing membranes that
 walks on its wings, flies under camera control, and appears as a rare secret
 spawn in the volcanic biome. It is built entirely from parts by script, and its
 animation is procedural, so there are no mesh or animation assets to upload.
@@ -51,5 +52,6 @@ To test quickly, set `DebugSpawnOnStart` (spawns one immediately) or
 
 - `Config.lua` - spawn odds, speeds, camera, debug switches.
 - `Rig.lua` - skeleton: joint names and rest positions.
-- `Builder.lua` - `Builder.build()` returns the finished Model.
+- `Builder.lua` - `Builder.build()` returns the finished Model. Colours are in
+  the `Colors` table at the top if you want to match your palette.
 - `Animator.lua` - turns velocity and state into joint poses each frame.
